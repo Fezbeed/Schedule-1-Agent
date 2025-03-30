@@ -1,7 +1,7 @@
 # ⚠️ BETA Version ⚠️
 Schedule-I-Agent is a small Client-Based recipe optimizer (Not calculator)
 ## Features
-- Find best profit for differnt client taste, Ex. Munchies
+- Find best profit for different client taste, Ex. Austin Steiner >> Calorie-Dense, Euphoric, Munchies
 - Based on Shibka's Calculator (https://schedule1-calculator.online)
 - Open Source (feel free to fork this)
 ## Installation
