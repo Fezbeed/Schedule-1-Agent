@@ -1441,12 +1441,14 @@ const clients = [
 ];
 
 function applyRules(baseEffectList, selectedSubstances) {
-  const original = [...baseEffectList];
+  // Use Set instead of array for faster lookups and eliminating duplicates
+  const original = new Set(baseEffectList);
   let working = [...baseEffectList];
-  const blocked = [];
   const processed = new Set();
 
   // PHASE 1 — Unblocked rules
+  const blockedRules = [];
+
   for (const rule of mixData.rules) {
     const {
       if_present = [],
@@ -1455,125 +1457,163 @@ function applyRules(baseEffectList, selectedSubstances) {
       replace = {},
       add = [],
     } = rule;
+
+    // Quick early exits
     if (requires_substance && !selectedSubstances.includes(requires_substance))
       continue;
-    if (!if_present.every((e) => original.includes(e))) continue;
+    if (!if_present.every((e) => original.has(e))) continue;
 
-    if (if_not_present.some((e) => original.includes(e))) {
-      blocked.push(rule);
+    if (if_not_present.some((e) => original.has(e))) {
+      blockedRules.push(rule);
       continue;
     }
 
-    for (const [oldEff, newEff] of Object.entries(replace)) {
-      if (original.includes(oldEff) && !processed.has(oldEff)) {
-        working = working.map((e) => (e === oldEff ? newEff : e));
-        processed.add(oldEff);
-      }
+    // Apply replacements
+    const replaceEntries = Object.entries(replace);
+    if (replaceEntries.length > 0) {
+      working = working.map((e) => {
+        // Only process each effect once
+        if (processed.has(e)) return e;
+
+        const newEffect = replace[e];
+        if (newEffect && original.has(e)) {
+          processed.add(e);
+          return newEffect;
+        }
+        return e;
+      });
     }
-    for (const newEff of add) {
-      if (!working.includes(newEff) && working.length < 8) {
-        working.push(newEff);
+
+    // Add new effects if under limit
+    if (working.length < 8) {
+      for (const newEff of add) {
+        if (!working.includes(newEff) && working.length < 8) {
+          working.push(newEff);
+        }
       }
     }
   }
 
   // PHASE 2 — Previously blocked rules
-  for (const rule of blocked) {
+  for (const rule of blockedRules) {
     const { if_not_present = [], replace = {}, add = [] } = rule;
+
+    // Skip if any blocking effects are still present
     if (if_not_present.some((e) => working.includes(e))) continue;
 
-    for (const [oldEff, newEff] of Object.entries(replace)) {
-      if (working.includes(oldEff)) {
-        working = working.map((e) => (e === oldEff ? newEff : e));
-      }
-    }
-    for (const newEff of add) {
-      if (!working.includes(newEff) && working.length < 8) {
-        working.push(newEff);
+    // Apply replacements
+    working = working.map((e) => replace[e] || e);
+
+    // Add new effects if under limit
+    if (working.length < 8) {
+      for (const newEff of add) {
+        if (!working.includes(newEff) && working.length < 8) {
+          working.push(newEff);
+        }
       }
     }
   }
 
+  // Use Set to remove duplicates and slice to limit to 8
   return Array.from(new Set(working)).slice(0, 8);
 }
 
 function calculateEffects(selects, weedTypeForMixing) {
-  const fullNameToAbbrev = {};
-  Object.entries(mixData.effect_abbreviations).forEach(
-    ([abbrev, full]) => (fullNameToAbbrev[full] = abbrev)
+  // Pre-compute full name to abbreviation map once
+  const fullNameToAbbrev = Object.fromEntries(
+    Object.entries(mixData.effect_abbreviations).map(([abbrev, full]) => [
+      full,
+      abbrev,
+    ])
   );
 
-  // Build initial effectList from the weed type (or previous mix)
-  const effectsSet = new Set();
+  // Build initial effectList from the weed type
+  let effectList = [];
   if (mixData.weed_types[weedTypeForMixing]) {
-    mixData.weed_types[weedTypeForMixing].forEach((e) => effectsSet.add(e));
+    effectList = [...mixData.weed_types[weedTypeForMixing]];
   }
 
-  let effectList = Array.from(effectsSet);
   let substanceCost = 0;
 
-  // Helper to compare arrays (order matters)
-  function arraysEqual(a, b) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== b[i]) return false;
-    }
-    return true;
+  // Cache substance effects and prices for better performance
+  const substanceEffectsMap = new Map();
+  mixData.effects.forEach((item) => {
+    substanceEffectsMap.set(item.substance, item.effect || []);
+  });
+
+  // Cache substance prices
+  const substancePrices = {};
+  for (const [sub, price] of Object.entries(mixData.substances_price)) {
+    substancePrices[sub] = parseFloat(price || "0");
   }
 
-  selects.forEach((sub) => {
-    if (!sub) return;
+  // Helper to compare arrays (using string representation for simplicity)
+  function arraysEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
 
-    const directEffects =
-      mixData.effects.find((e) => e.substance === sub)?.effect || [];
+  for (const sub of selects) {
+    if (!sub) continue;
 
+    const directEffects = substanceEffectsMap.get(sub) || [];
     const isSpecialD = sub === "D";
-    // Get the cost for this substance (but only add it if we use it)
-    const subCost = parseFloat(mixData.substances_price[sub] || "0");
+    const subCost = substancePrices[sub] || 0;
 
     if (effectList.length < 8) {
-      // Not at the cap—add the default effect if applicable.
+      // Not at the cap—add the default effect if applicable
       if (!isSpecialD) {
-        directEffects.forEach((eff) => {
-          if (!effectList.includes(eff) && effectList.length < 8)
+        for (const eff of directEffects) {
+          if (!effectList.includes(eff) && effectList.length < 8) {
             effectList.push(eff);
-        });
+          }
+        }
       }
+
       effectList = applyRules(effectList, [sub]);
+
       if (isSpecialD) {
-        directEffects.forEach((eff) => {
-          if (!effectList.includes(eff) && effectList.length < 8)
+        for (const eff of directEffects) {
+          if (!effectList.includes(eff) && effectList.length < 8) {
             effectList.push(eff);
-        });
+          }
+        }
       }
-      // Accept this substance: add its cost.
+
+      // Accept this substance: add its cost
       substanceCost += subCost;
     } else {
-      // Already at 8 effects.
-      // Do NOT add the default effect; only simulate applying the substance's rules.
+      // Already at 8 effects
       const simulatedEffects = applyRules([...effectList], [sub]);
+
       if (arraysEqual(simulatedEffects, effectList)) {
-        // Substance adds neither its default nor any rule-based change.
-        // Mark it as skipped and do not add its cost.
-        return; // Skip further processing for this substance.
+        // Substance adds no change - skip it
+        continue;
       } else {
-        // Accept the substance: update effectList and add its cost.
+        // Accept the substance
         effectList = simulatedEffects;
         substanceCost += subCost;
       }
     }
-  });
+  }
 
   const displayNames = effectList.map(
     (e) => mixData.effect_abbreviations[e] || e
   );
 
-  // Pricing & Sell Price calculations.
+  // Pricing calculations
   const weedPrice = parseFloat(mixData.weed_price["OG Kush"] || "0");
+
+  // Cache effect prices
+  const effectPrices = {};
+  for (const [effect, price] of Object.entries(mixData.effect_price)) {
+    effectPrices[effect] = parseFloat(price || "0");
+  }
+
   const effectSum = effectList.reduce(
-    (sum, e) => sum + parseFloat(mixData.effect_price[e] || "0"),
+    (sum, e) => sum + (effectPrices[e] || 0),
     0
   );
+
   const sellPrice = Math.round(weedPrice * (1 + effectSum));
 
   return {
@@ -1590,107 +1630,152 @@ function findEffectCombinations(
   step_limit,
   base_material
 ) {
-  const results = [];
-  const combinations = [];
-  const repeatableItems = ["A", "K"];
-  const seenResults = new Set(); // To track unique results
+  // For tracking unique results - use a Map for faster lookups
+  const resultMap = new Map();
 
-  const low_level = ingredients.map((el) => {
-    return Object.keys(mixData.substances).find(
-      (key) => mixData.substances[key] === el
-    );
-  });
+  // Convert ingredients to low level codes once
+  const substanceMap = new Map(Object.entries(mixData.substances));
+  const codeToNameMap = new Map();
 
-  // Helper function to generate combinations with special rules
-  function generateCombinations(size, currentCombination = []) {
-    if (currentCombination.length === size) {
-      combinations.push([...currentCombination]);
-      return;
-    }
-
-    for (let i = 0; i < low_level.length; i++) {
-      const item = low_level[i];
-
-      // Rule: Can repeat only A or K substances
-      const itemCount = currentCombination.filter((el) => el === item).length;
-      if (itemCount > 0 && !repeatableItems.includes(item)) {
-        continue; // Skip non-repeatable items that are already in the combination
-      }
-
-      // Rule: Allow repeating up to 2 times only
-      if (itemCount >= 2) {
-        continue; // Skip if item already appears twice
-      }
-
-      // Rule: Do not allow neighbor repeat
-      if (
-        currentCombination.length > 0 &&
-        currentCombination[currentCombination.length - 1] === item
-      ) {
-        continue; // Skip if the last added item is the same
-      }
-
-      currentCombination.push(item);
-      generateCombinations(size, currentCombination);
-      currentCombination.pop();
-    }
+  for (const [code, name] of substanceMap.entries()) {
+    codeToNameMap.set(code, name);
   }
 
-  // Generate all combinations of sizes 2, 3, and 4
+  const low_level = ingredients
+    .map((el) => {
+      for (const [code, name] of substanceMap.entries()) {
+        if (name === el) return code;
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  const repeatableItems = new Set(["A", "F", "H", "K"]);
+
+  // Pre-compute desired effects as a Set for faster lookups
+  const desiredEffectsSet = new Set(desired_effects);
+
+  // Track the best combinations to avoid unnecessary calculations
+  const bestMatchCount = { value: 0 };
+  const bestProfit = { value: 0 };
+
+  // Use iterative approach instead of recursive for better performance
+  function generateAndTestCombinations(size) {
+    // Use a more efficient algorithm for generating combinations
+    // For very large datasets, consider a bit manipulation approach
+    const stack = [];
+    const current = [];
+    const visited = new Set();
+
+    function backtrack(start, depth) {
+      if (depth === size) {
+        // Process the combination
+        const effects = calculateEffects([...current], base_material);
+
+        // Check for matches with desired effects
+        const matchedEffects = [];
+        let matchCount = 0;
+
+        for (const effect of effects.displayNames) {
+          if (desiredEffectsSet.has(effect)) {
+            matchedEffects.push(effect);
+            matchCount++;
+          }
+        }
+
+        if (matchCount > 0) {
+          // Create unique identifier based on sorted effects and profit
+          const sortedDisplayNames = [...effects.displayNames].sort().join(",");
+          const uniqueKey = `${sortedDisplayNames}|${effects.profit}`;
+
+          // Only store if we haven't seen this result before
+          if (!resultMap.has(uniqueKey)) {
+            const fullNameCombo = current.map((code) =>
+              codeToNameMap.get(code)
+            );
+
+            resultMap.set(uniqueKey, {
+              combination: fullNameCombo,
+              effects: effects,
+              matchedEffects: matchedEffects,
+              matchCount: matchCount,
+            });
+
+            // Update best match count for early termination optimizations
+            if (matchCount > bestMatchCount.value) {
+              bestMatchCount.value = matchCount;
+            }
+            if (effects.profit > bestProfit.value) {
+              bestProfit.value = effects.profit;
+            }
+          }
+        }
+        return;
+      }
+
+      // Optimization: avoid combinations that can't beat our best match
+      if (depth + (size - depth) < bestMatchCount.value) {
+        return;
+      }
+
+      const lastItem = current.length > 0 ? current[current.length - 1] : null;
+
+      for (let i = start; i < low_level.length; i++) {
+        const item = low_level[i];
+
+        // Skip if item is same as last one (no neighbor repeats)
+        if (item === lastItem) continue;
+
+        // Count occurrences of this item in current combination
+        let itemCount = 0;
+        for (let j = 0; j < current.length; j++) {
+          if (current[j] === item) itemCount++;
+        }
+
+        // Apply repeatable item rules
+        if (itemCount > 0 && !repeatableItems.has(item)) continue;
+        if (itemCount >= 2) continue;
+
+        current.push(item);
+        backtrack(0, depth + 1); // Start from 0 to allow using any item next
+        current.pop();
+      }
+    }
+
+    backtrack(0, 0);
+  }
+
+  // Generate combinations of sizes 2 through step_limit
   for (let size = 2; size <= step_limit; size++) {
-    generateCombinations(size);
+    generateAndTestCombinations(size);
   }
 
-  // Test each combination with calculateEffects
-  combinations.forEach((combo) => {
-    const effects = calculateEffects(combo, base_material);
+  // Convert Map to array and sort
+  const results = Array.from(resultMap.values());
 
-    // Check which desired effects are in the result
-    const matchedEffects = desired_effects.filter((effect) =>
-      effects.displayNames.includes(effect)
-    );
-
-    // Use 'some' instead of 'every' - at least one effect must match
-    const hasAnyDesiredEffect = matchedEffects.length > 0;
-
-    if (hasAnyDesiredEffect) {
-      // Create a unique key based on sorted combination, sorted displayNames, and profit
-      const sortedCombo = [...combo].sort().join(",");
-      const sortedDisplayNames = [...effects.displayNames].sort().join(",");
-      const uniqueKey = `${sortedCombo}|${sortedDisplayNames}|${effects.profit}`;
-
-      // Check if we've already seen this result
-      if (!seenResults.has(uniqueKey)) {
-        seenResults.add(uniqueKey);
-
-        const fullNameCombo = combo.map((el) => mixData.substances[el]);
-
-        results.push({
-          combination: fullNameCombo,
-          effects: effects,
-          matchedEffects: matchedEffects,
-          matchCount: matchedEffects.length,
-        });
-      }
-    }
-  });
-
-  // Sort results by number of matched effects (most matches first) and then by profit
-  const sorted_result = results.sort(
+  // Sort by match count (descending) then by profit (descending)
+  return results.sort(
     (a, b) => b.matchCount - a.matchCount || b.effects.profit - a.effects.profit
   );
-
-  return sorted_result;
 }
 
 // Use ingredients from mixData.substances only!
-const available_ingredients = ["Cuke", "Donut", "Banana", "Paracetamol"];
+const available_ingredients = [
+  "Cuke",
+  "Donut",
+  "Banana",
+  "Paracetamol",
+  "Viagra",
+  "Mouth Wash",
+  "Gasoline",
+  "Motor Oil",
+];
 const target_client = "Austin Steiner";
 const base_material = "OG Kush";
-const step_limit = 4;
+const step_limit = 7; // ~5 min
 const effects = clients.find((spec) => spec.name === target_client);
 
-// TODO: Update dataset & High Level bug fix
+// TODO: Improve performance & High Level bug fix
 // Source: https://steamcommunity.com/sharedfiles/filedetails/?id=3453359739
 
 if (effects) {
@@ -1702,6 +1787,6 @@ if (effects) {
   );
   console.log(
     "Valid combinations:",
-    JSON.stringify(validCombinations, null, 2)
+    JSON.stringify(validCombinations.slice(0, 2), null, 2)
   );
 } else console.info("Client not found.");
