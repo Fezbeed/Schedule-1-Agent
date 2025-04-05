@@ -1601,7 +1601,7 @@ function calculateEffects(selects, weedTypeForMixing) {
   );
 
   // Pricing calculations
-  const weedPrice = parseFloat(mixData.weed_price["OG Kush"] || "0");
+  const weedPrice = parseFloat(mixData.weed_price[weedTypeForMixing] || "0");
 
   // Cache effect prices
   const effectPrices = {};
@@ -1644,11 +1644,24 @@ function findEffectCombinations(
   const low_level = ingredients
     .map((el) => {
       for (const [code, name] of substanceMap.entries()) {
+        if (el === "Donut" && !desired_effects.includes("Calorie-Dense"))
+          return null;
+        if (el === "Viagra" && !desired_effects.includes("Sedating"))
+          return null;
+        if (el === "Gasoline" && !desired_effects.includes("Smelly"))
+          return null;
+        if (el === "Horse Semen" && !desired_effects.includes("Long Faced"))
+          return null;
+        if (el === "Chili" && !desired_effects.includes("Spicy")) return null;
+        if (el === "Battery" && !desired_effects.includes("Bright-Eyed"))
+          return null;
         if (name === el) return code;
       }
       return null;
     })
     .filter(Boolean);
+
+  // console.log("low level:", low_level);
 
   const repeatableItems = new Set(["A", "F", "H", "K"]);
 
@@ -1663,9 +1676,9 @@ function findEffectCombinations(
   function generateAndTestCombinations(size) {
     // Use a more efficient algorithm for generating combinations
     // For very large datasets, consider a bit manipulation approach
-    const stack = [];
+    // const stack = [];
     const current = [];
-    const visited = new Set();
+    // const visited = new Set();
 
     function backtrack(start, depth) {
       if (depth === size) {
@@ -1769,10 +1782,13 @@ const available_ingredients = [
   "Mouth Wash",
   "Gasoline",
   "Motor Oil",
+  "Mega Bean",
+  "Chili",
+  "Battery",
 ];
 const target_client = "Austin Steiner";
 const base_material = "OG Kush";
-const step_limit = 7; // ~5 min
+const step_limit = 5; // ~5 min
 const effects = clients.find((spec) => spec.name === target_client);
 
 // TODO: Improve performance & High Level bug fix
