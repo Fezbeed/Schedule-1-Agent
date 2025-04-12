@@ -1,3 +1,6 @@
+/* Scroll all the way down to the bottom of this file to edit parameters */
+/* Original from Shibka's Calculator, Adapted by Fezbeed */
+
 const mixData = {
   substances: {
     A: "Cuke",
@@ -1258,7 +1261,7 @@ const clients = [
     desired_effects: ["Gingeritis", "Shrinking", "Electrifying"],
   },
   {
-    name: "Peggy Mayers",
+    name: "Peggy Myers",
     desired_effects: ["Bright-Eyed", "Refreshing", "Energizing"],
   },
   {
@@ -1440,6 +1443,41 @@ const clients = [
   },
 ];
 
+// Precomputed data structures for optimization
+const substanceEffectsMap = new Map();
+const substancePrices = {};
+const effectPrices = {};
+const codeToNameMap = new Map();
+
+// Initialize all precomputed data
+function initializeDataStructures() {
+  // Build substanceEffectsMap
+  for (const item of mixData.effects) {
+    substanceEffectsMap.set(
+      item.substance,
+      Array.isArray(item.effect) ? item.effect : [item.effect]
+    );
+  }
+
+  // Cache substance prices
+  for (const [sub, price] of Object.entries(mixData.substances_price)) {
+    substancePrices[sub] = parseFloat(price || "0");
+  }
+
+  // Cache effect prices
+  for (const [effect, price] of Object.entries(mixData.effect_price)) {
+    effectPrices[effect] = parseFloat(price || "0");
+  }
+
+  // Build codeToNameMap
+  for (const [code, name] of Object.entries(mixData.substances)) {
+    codeToNameMap.set(code, name);
+  }
+}
+
+// Initialize data structures at startup
+initializeDataStructures();
+
 function applyRules(baseEffectList, selectedSubstances) {
   // Use Set instead of array for faster lookups and eliminating duplicates
   const original = new Set(baseEffectList);
@@ -1519,14 +1557,6 @@ function applyRules(baseEffectList, selectedSubstances) {
 }
 
 function calculateEffects(selects, weedTypeForMixing) {
-  // Pre-compute full name to abbreviation map once
-  const fullNameToAbbrev = Object.fromEntries(
-    Object.entries(mixData.effect_abbreviations).map(([abbrev, full]) => [
-      full,
-      abbrev,
-    ])
-  );
-
   // Build initial effectList from the weed type
   let effectList = [];
   if (mixData.weed_types[weedTypeForMixing]) {
@@ -1534,18 +1564,6 @@ function calculateEffects(selects, weedTypeForMixing) {
   }
 
   let substanceCost = 0;
-
-  // Cache substance effects and prices for better performance
-  const substanceEffectsMap = new Map();
-  mixData.effects.forEach((item) => {
-    substanceEffectsMap.set(item.substance, item.effect || []);
-  });
-
-  // Cache substance prices
-  const substancePrices = {};
-  for (const [sub, price] of Object.entries(mixData.substances_price)) {
-    substancePrices[sub] = parseFloat(price || "0");
-  }
 
   // Helper to compare arrays (using string representation for simplicity)
   function arraysEqual(a, b) {
@@ -1603,12 +1621,6 @@ function calculateEffects(selects, weedTypeForMixing) {
   // Pricing calculations
   const weedPrice = parseFloat(mixData.weed_price[weedTypeForMixing] || "0");
 
-  // Cache effect prices
-  const effectPrices = {};
-  for (const [effect, price] of Object.entries(mixData.effect_price)) {
-    effectPrices[effect] = parseFloat(price || "0");
-  }
-
   const effectSum = effectList.reduce(
     (sum, e) => sum + (effectPrices[e] || 0),
     0
@@ -1628,18 +1640,14 @@ function findEffectCombinations(
   ingredients,
   desired_effects,
   step_limit,
-  base_material
+  base_material,
+  unwanted_effects
 ) {
   // For tracking unique results - use a Map for faster lookups
   const resultMap = new Map();
 
   // Convert ingredients to low level codes once
   const substanceMap = new Map(Object.entries(mixData.substances));
-  const codeToNameMap = new Map();
-
-  for (const [code, name] of substanceMap.entries()) {
-    codeToNameMap.set(code, name);
-  }
 
   const low_level = ingredients
     .map((el) => {
@@ -1650,9 +1658,6 @@ function findEffectCombinations(
           return null;
         if (el === "Gasoline" && !desired_effects.includes("Smelly"))
           return null;
-        if (el === "Horse Semen" && !desired_effects.includes("Long Faced"))
-          return null;
-        if (el === "Chili" && !desired_effects.includes("Spicy")) return null;
         if (el === "Battery" && !desired_effects.includes("Bright-Eyed"))
           return null;
         if (name === el) return code;
@@ -1663,7 +1668,7 @@ function findEffectCombinations(
 
   // console.log("low level:", low_level);
 
-  const repeatableItems = new Set(["A", "F", "H", "K"]);
+  const repeatableItems = new Set(["A", "E", "F", "H", "I", "K", "M"]);
 
   // Pre-compute desired effects as a Set for faster lookups
   const desiredEffectsSet = new Set(desired_effects);
@@ -1687,16 +1692,21 @@ function findEffectCombinations(
 
         // Check for matches with desired effects
         const matchedEffects = [];
+        let disqualified = false;
         let matchCount = 0;
 
         for (const effect of effects.displayNames) {
-          if (desiredEffectsSet.has(effect)) {
+          if (unwanted_effects.includes(effect)) {
+            disqualified = true;
+          }
+
+          if (!disqualified && desiredEffectsSet.has(effect)) {
             matchedEffects.push(effect);
             matchCount++;
           }
         }
 
-        if (matchCount > 0) {
+        if (!disqualified && matchCount > 0) {
           // Create unique identifier based on sorted effects and profit
           const sortedDisplayNames = [...effects.displayNames].sort().join(",");
           const uniqueKey = `${sortedDisplayNames}|${effects.profit}`;
@@ -1723,6 +1733,7 @@ function findEffectCombinations(
             }
           }
         }
+
         return;
       }
 
@@ -1772,7 +1783,9 @@ function findEffectCombinations(
   );
 }
 
-// Use ingredients from mixData.substances only!
+/* **************** START EDIT HERE **************** */
+/* Use ingredients from mixData.substances only! */
+
 const available_ingredients = [
   "Cuke",
   "Donut",
@@ -1780,29 +1793,39 @@ const available_ingredients = [
   "Paracetamol",
   "Viagra",
   "Mouth Wash",
+  "Flu Medicine",
   "Gasoline",
   "Motor Oil",
+  "Energy Drink",
   "Mega Bean",
   "Chili",
   "Battery",
+  "Iodine",
+  "Addy",
+  "Horse Semen",
 ];
-const target_client = "Austin Steiner";
-const base_material = "OG Kush";
-const step_limit = 5; // ~5 min
-const effects = clients.find((spec) => spec.name === target_client);
+const target_client = "George Greene";
+const base_material = "OG Kush"; // Seed type
+const step_limit = 4; // ~5 min
+const unwanted_effects = ["Gingeritis"];
 
-// TODO: Improve performance & High Level bug fix
-// Source: https://steamcommunity.com/sharedfiles/filedetails/?id=3453359739
+/* **************** END **************** */
+
+const effects = clients.find((spec) => spec.name === target_client);
 
 if (effects) {
   const validCombinations = findEffectCombinations(
     available_ingredients,
     effects.desired_effects,
     step_limit,
-    base_material
+    base_material,
+    unwanted_effects
   );
   console.log(
     "Valid combinations:",
     JSON.stringify(validCombinations.slice(0, 2), null, 2)
   );
 } else console.info("Client not found.");
+
+// TODO: Update formular & Web UI
+// Source: https://steamcommunity.com/sharedfiles/filedetails/?id=3453359739
